@@ -1,0 +1,100 @@
+#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+
+/*
+Sawyer Bowerman CS444
+
+This project file consists of the DIAR decryption method.
+*/
+
+#define DATA_DISKS 4
+#define PARITY_DISKS 3
+#define TOTAL_DISKS (DATA_DISKS + PARITY_DISKS)
+
+// For error correction, maps syndrome to error position (0 means no error)
+static const uint8_t error_correction_table[8] = {
+    0, // 000 -> No error
+    1, // 001 -> Error in bit 1
+    2, // 010 -> Error in bit 2
+    3, // 011 -> Error in bit 3
+    4, // 100 -> Error in bit 4
+    5, // 101 -> Error in bit 5
+    6, // 110 -> Error in bit 6
+    7  // 111 -> Error in bit 7
+};
+
+
+static const uint8_t hamming_decode_table[128] = {
+    //  fill this in with the reverse mapping
+
+};
+
+
+int main(int argc, char *argv[]) {
+    char *inFile = NULL;
+    int fileSize = 0;
+    int debug = 0;
+    int opt;
+    FILE *inputs[TOTAL_DISKS];
+    char filename[256];
+    char outFilename[256];
+    
+    // Parse command line arguments
+    while ((opt = getopt(argc, argv, "f:s:d")) != -1) {
+        switch (opt) {
+            case 'f':
+                inFile = optarg;
+                break;
+            case 's':
+                fileSize = atoi(optarg);
+                break;
+            case 'd':
+                debug = 1;
+                break;
+            default:
+                fprintf(stderr, "Usage: %s -f filename -s filesize [-d]\n", argv[0]);
+                exit(1);
+        }
+    }
+
+    for (int i = 0; i < TOTAL_DISKS; i++) {
+        inputs[i] = fopen(filename, "rb");
+        if (!inputs[i]) {
+            perror("Error opening input file");
+        }
+    }
+
+
+    for (int i = 0; i < TOTAL_DISKS; i++) {
+        fclose(inputs[i]);
+        if (!inputs[i]) {
+            for (int j = 0; j < 7; i++) {
+                fclose(inputs[j]);
+            }
+            exit(1);
+        }
+        if (debug) {
+            printf("opened: %s\n", filename);
+        }
+    }
+
+
+    FILE *output = fopen(outFilename, "wb");
+    
+    // TODO
+    // 1. Read bits from each part file
+    // 2. Combine them to form 7-bit Hamming codes
+    // 3. Check for errors using parity bits
+    // 4. Correct errors if found
+    // 5. Extract the 4-bit data from each 7-bit code
+    // 6. Combine two 4-bit nibbles to form a byte
+    // 7. Write the byte to the output file
+
+    fclose(output);
+
+    return 0;
+}

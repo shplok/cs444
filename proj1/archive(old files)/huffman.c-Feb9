@@ -1,0 +1,118 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include "minheap.h"
+
+// Name: Sawyer Bowerman
+
+// The geeks for geeks implementation of the huffman code problem was extremely informative and useful for helping me to figure out how to implement.
+
+// Structure to store Huffman codes
+struct HuffmanCode {
+    unsigned char bits[256];  // The code itself
+    int length;              // Length of the code
+};
+
+// Store codes for each character
+struct HuffmanCode codes[256];
+
+// [GFG Influence] Core logic similar to GFG's printCodes function
+void storeCodes(struct Node* root, int arr[], int top) {
+    if (root->left) {
+        arr[top] = 0;
+        storeCodes(root->left, arr, top + 1);
+    }
+
+    if (root->right) {
+        arr[top] = 1;
+        storeCodes(root->right, arr, top + 1);
+    }
+
+    if (!root->left && !root->right) {
+        for (int i = 0; i < top; i++) {
+            codes[root->inputs].bits[i] = arr[i];
+        }
+        codes[root->inputs].length = top;
+    }
+}
+
+// [GFG Influence] Print huffman codes
+void printCodes(struct Node* root, int arr[], int top) {
+    if (root->left) {
+        arr[top] = 0;
+        printCodes(root->left, arr, top + 1);
+    }
+
+    if (root->right) {
+        arr[top] = 1;
+        printCodes(root->right, arr, top + 1);
+    }
+
+    if (!root->left && !root->right) {
+        printf("%c: ", root->inputs);
+        for (int i = 0; i < top; i++)
+            printf("%d", arr[i]);
+        printf("\n");
+    }
+}
+
+// [GFG Influence] Build the huffman tree structure
+struct Node* buildHuffmanTree(int freq[]) {
+    struct MinHeap* minHeap = createMinHeap(256);
+
+    for (int i = 0; i < 256; i++) {
+        if (freq[i] != 0) {
+            insertMinHeap(minHeap, newNode(i, freq[i]));
+        }
+    }
+
+    while (minHeap->size > 1) {
+        struct Node* left = extractMin(minHeap);
+        struct Node* right = extractMin(minHeap);
+
+        struct Node* top = newNode('$', left->freq + right->freq);
+        top->left = left;
+        top->right = right;
+
+        insertMinHeap(minHeap, top);
+    }
+
+    return extractMin(minHeap);
+}
+
+// Basic tree cleanup
+void freeTree(struct Node* root) {
+    if (root == NULL) return;
+    freeTree(root->left);
+    freeTree(root->right);
+    free(root);
+}
+
+int main() {
+    // Simple hardcoded test case first
+    char testStr[] = "this is a test string";
+    int freq[256] = {0};
+    
+    // Count frequencies in test string
+    for(int i = 0; testStr[i] != '\0'; i++) {
+        freq[testStr[i]]++;
+    }
+
+    // Print character frequencies
+    printf("Character frequencies:\n");
+    for (int i = 0; i < 256; i++) {
+        if (freq[i] > 0) {
+            printf("'%c': %d\n", i, freq[i]);
+        }
+    }
+
+    // Build and print Huffman codes
+    struct Node* root = buildHuffmanTree(freq);
+    printf("\nHuffman Codes:\n");
+    int arr[256] = {0}, top = 0;
+    printCodes(root, arr, top);
+
+    // Clean up
+    freeTree(root);
+
+    return 0;
+}

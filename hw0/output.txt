@@ -1,0 +1,11 @@
+Hello World!
+Hello Again!
+my username is:
+soyr
+iIiIiIiIiIi
+IiIiIiIiIiI
+2059719 pts/41   00:00:00 top
+7 18 114
+8 21 123
+9 24 132
+/courses/cs444/s25/hdeblois/soyr/hw0/crude_wc

@@ -1,0 +1,57 @@
+#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+/*
+Sawyer Bowerman CS444
+
+This project file consists of the RAID encryption method.
+*/
+
+
+
+int main(int argc, char *argv[]) {
+
+    char *inFile = "completeShakespeare.txt";
+    char *outFile = NULL;
+    int debug = 0;
+    int opt;
+    
+    while ((opt = getopt(argc, argv, "f:d")) != -1) {
+        switch (opt) {
+            case 'f':
+                inFile = optarg;
+                break;
+            case 'd':
+                debug = 1;
+                break;
+            default:
+                fprintf(stderr, "Usage: %s [-f file input] [-d]\n", argv[0]);
+                exit(1);
+        }
+    }
+
+    char *dotPos = strrchr(inFile, '.');
+
+    if (dotPos == NULL) {
+        char *outFile = malloc(strlen(inFile) + strlen(".out") + 1); // +1 for null terminator
+        strcpy(outFile, inFile);
+        strcat(outFile, ".out"); 
+    } else {
+        size_t baseLen = dotPos - inFile;
+        outFile = malloc(baseLen + strlen(".out") + 1); // +1 for null terminator
+
+        strncpy(outFile, inFile, baseLen);
+        outFile[baseLen] = '\0';
+        strcat(outFile, ".out");    
+    }
+
+    if (debug) {
+        printf("Input file: %s\n", inFile);
+        printf("Output file: %s\n", outFile);
+    }
+
+    free(outFile);
+
+    return 0;
+}

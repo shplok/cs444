@@ -1,0 +1,77 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include "minheap.h"
+
+// Name: Sawyer Bowerman
+
+// MinHeap implementation utilized gfg and w3schools' implementation and usage. I also referenced an older MinHeap project that I did in python for heapsort (from cs310)
+
+struct MinHeap* createMinHeap(unsigned cap) {
+        struct MinHeap* minHeap = (struct MinHeap*)malloc(sizeof(struct MinHeap));
+        minHeap->size = 0;
+        minHeap->cap = cap;
+        minHeap->array = (struct Node**)malloc(minHeap->cap * sizeof(struct Node*));
+        return minHeap;
+}
+
+// create new node with given inputs and freq
+struct Node* newNode(unsigned char inputs, unsigned freq) {  // Changed from char to unsigned char
+        struct Node* temp = (struct Node*)malloc(sizeof(struct Node));
+        temp->left = temp->right = NULL;
+        temp->inputs = inputs;
+        temp->freq = freq;
+        return temp;
+}
+
+// swap two nodes of interest
+void swapNode(struct Node** a, struct Node** b) {
+        struct Node* t = *a;
+        *a = *b;
+        *b = t;
+}
+
+// heapify the tree at given index
+void minHeapify(struct MinHeap* minHeap, int idx) {
+        int smallest = idx;
+        int left = 2 * idx + 1;
+        int right = 2 * idx + 2;
+
+        // check if left child is smaller
+        if (left < minHeap->size && 
+            minHeap->array[left]->freq < minHeap->array[smallest]->freq)
+                smallest = left;
+
+        // check if right child is smaller
+        if (right < minHeap->size && 
+            minHeap->array[right]->freq < minHeap->array[smallest]->freq)
+                smallest = right;
+
+        // if smallest isnt root
+        if (smallest != idx) {
+                swapNode(&minHeap->array[smallest], &minHeap->array[idx]);
+                minHeapify(minHeap, smallest);
+        }
+}
+
+// insert new node into the heap
+void insertMinHeap(struct MinHeap* minHeap, struct Node* node) {
+        ++minHeap->size;
+        int i = minHeap->size - 1;
+
+        // find correct position for new node
+        while (i && node->freq < minHeap->array[(i - 1) / 2]->freq) {
+                minHeap->array[i] = minHeap->array[(i - 1) / 2];
+                i = (i - 1) / 2;
+        }
+
+        minHeap->array[i] = node;
+}
+
+// extract node with minimum value
+struct Node* extractMin(struct MinHeap* minHeap) {
+        struct Node* temp = minHeap->array[0];
+        minHeap->array[0] = minHeap->array[minHeap->size - 1];
+        --minHeap->size;
+        minHeapify(minHeap, 0);
+        return temp;
+}

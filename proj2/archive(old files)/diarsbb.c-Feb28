@@ -1,0 +1,29 @@
+#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+
+/*
+Sawyer Bowerman CS444
+
+This project file consists of the DIAR decryption method.
+*/
+
+// For error correction, maps syndrome to error position (0 means no error)
+static const uint8_t error_correction_table[8] = {
+    0, // 000 -> No error
+    1, // 001 -> Error in bit 1
+    2, // 010 -> Error in bit 2
+    3, // 011 -> Error in bit 3
+    4, // 100 -> Error in bit 4
+    5, // 101 -> Error in bit 5
+    6, // 110 -> Error in bit 6
+    7  // 111 -> Error in bit 7
+};
+
+int main(int argc, char *argv[]) {
+
+    return 0;
+}

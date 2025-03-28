@@ -1,0 +1,786 @@
+Script started on 2025-03-28 14:49:29-04:00 [TERM="xterm" TTY="/dev/pts/0" COLUMNS="100" LINES="35"]
+soyr@pe15:~/cs444/proj3$ cat bsh.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+#include <fcntl.h>
+
+//accept up to 16 command-line arguments
+#define MAXARG 16
+
+//allow up to 64 environment variables
+#define MAXENV 64
+
+//keep the last 500 commands in history
+#define HISTSIZE 500
+
+//accept up to 1024 bytes in one command
+#define MAXLINE 1024
+
+
+char *env_copy[MAXENV]; // copy of environment variables
+int env_count = 0;      // count of environment variables
+
+char history[HISTSIZE][MAXLINE]; // command history
+int hist_count = 0;              // count of commands in history
+
+// Returns index if found, -1 if not found
+int find_env(const char *var) {
+  int len = strlen(var);
+  
+  for (int i = 0; i < env_count; i++) {
+      if (strncmp(env_copy[i], var, len) == 0 && env_copy[i][len] == '=') {
+          return i;
+      }
+  }
+  return -1;
+}
+
+// add a command to history
+void add_to_history(char *cmd) {
+  if (strlen(cmd) > 0) {
+      int idx = hist_count % HISTSIZE;
+      strncpy(history[idx], cmd, MAXLINE-1);
+      history[idx][MAXLINE-1] = '\0';
+      hist_count++;
+  }
+}
+
+static char **parseCmd(char cmdLine[]) {
+  char **cmdArg, *ptr;
+  int i, j, k;
+  char expandedCmd[MAXLINE * 2];
+
+  // Insert spaces around special characters (|, <, >)
+  j = 0;
+  for (i = 0; cmdLine[i] != '\0' && j < MAXLINE * 2 - 1; i++) {
+    if (cmdLine[i] == '|' || cmdLine[i] == '<' || cmdLine[i] == '>') {
+      // put spaces before special character if not already a space
+      if (i > 0 && cmdLine[i-1] != ' ' && j < MAXLINE * 2 - 1) {
+        expandedCmd[j++] = ' ';
+      }
+      // add the special character
+      expandedCmd[j++] = cmdLine[i];
+      // add space after special character if not already there
+      if (cmdLine[i+1] != ' ' && cmdLine[i+1] != '\0' && j < MAXLINE * 2 - 1) {
+        expandedCmd[j++] = ' ';
+      }
+    } else {
+      expandedCmd[j++] = cmdLine[i];
+    }
+  }
+  expandedCmd[j] = '\0';
+
+  //(MAXARG + 1) because the list must be terminated by a NULL ptr
+  cmdArg = (char **) malloc(sizeof(char *) * (MAXARG + 1));
+  if (cmdArg == NULL) {
+    perror("parseCmd: cmdArg is NULL");
+    exit(1);
+  }
+  for (i = 0; i <= MAXARG; i++) //note equality
+    cmdArg[i] = NULL;
+  i = 0;
+  
+  // call the spaced command
+  char *cmdLineCopy = strdup(expandedCmd);
+  ptr = strsep(&cmdLineCopy, " ");
+  while (ptr != NULL) {
+    if (strlen(ptr) > 0) {  // Skip empty tokens
+      cmdArg[i] = (char *) malloc(sizeof(char) * (strlen(ptr) + 1));
+      if (cmdArg[i] == NULL) {
+        perror("parseCmd: cmdArg[i] is NULL");
+        exit(1);
+      }
+      strcpy(cmdArg[i++], ptr);
+      if (i == MAXARG)
+        break;
+    }
+    ptr = strsep(&cmdLineCopy, " ");
+  }
+  free(cmdLineCopy);
+  return(cmdArg);
+}
+
+
+void process_redirection(char **cmdArg) {
+  int i, in_redirect = -1, out_redirect = -1;
+  
+  // Find redirection symbols
+  for (i = 0; cmdArg[i] != NULL; i++) {
+    if (strcmp(cmdArg[i], "<") == 0) {
+      in_redirect = i;
+    } else if (strcmp(cmdArg[i], ">") == 0) {
+      out_redirect = i;
+    }
+  }
+  
+  // input redirection
+  if (in_redirect != -1) {
+    if (cmdArg[in_redirect + 1] == NULL) {
+      fprintf(stderr, "Error: Missing input file\n");
+      return;
+    }
+    
+    int fd = open(cmdArg[in_redirect + 1], O_RDONLY);
+    if (fd < 0) {
+      perror("open input file");
+      return;
+    }
+    
+    // redirect stdin
+    dup2(fd, STDIN_FILENO);
+    close(fd);
+    
+    // Remove redirection from arguments
+    cmdArg[in_redirect] = NULL;
+  }
+  
+  // Handle output redirection
+  if (out_redirect != -1) {
+    if (cmdArg[out_redirect + 1] == NULL) {
+      fprintf(stderr, "Error: Missing output file\n");
+      return;
+    }
+    
+    int fd = open(cmdArg[out_redirect + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+      perror("open output file");
+      return;
+    }
+    
+    // Redirect stdout
+    dup2(fd, STDOUT_FILENO);
+    close(fd);
+    
+    // Remove redirection from arguments
+    cmdArg[out_redirect] = NULL;
+  }
+}
+
+int main(int argc, char *argv[], char *envp[]) {
+  char cmdLine[MAXLINE], **cmdArg;
+  int status, i, debug;
+  pid_t pid;
+
+  debug = 1;
+  i = 1;
+  while (i < argc) {
+    if (! strcmp(argv[i], "-d") )
+      debug = 1;
+    i++;
+  }
+
+  // Initialize environment variables
+  for (i = 0; envp[i] != NULL && env_count < MAXENV; i++) {
+    env_copy[env_count] = strdup(envp[i]);
+    if (env_copy[env_count] == NULL) {
+        perror("Failed to copy environment variable");
+        exit(1);
+    }
+    env_count++;
+  }
+
+  while (( 1 )) {
+    printf("bsh> ");                      //prompt
+    fgets(cmdLine, MAXLINE, stdin);       //get a line from keyboard
+    cmdLine[strlen(cmdLine) - 1] = '\0';  //strip '\n'
+
+    add_to_history(cmdLine);
+
+    cmdArg = parseCmd(cmdLine);
+    if (debug) {
+      i = 0;
+      while (cmdArg[i] != NULL) {
+	printf("\t%d (%s)\n", i, cmdArg[i]);
+	i++;
+      }
+    }
+
+    //built-in command exit
+    if (strcmp(cmdArg[0], "exit") == 0) {
+      if (debug)
+	printf("exiting\n");
+      break;
+    }
+    //built-in command env
+    else if (strcmp(cmdArg[0], "env") == 0) {
+      for (i = 0; i < env_count; i++) {
+          printf("%s\n", env_copy[i]);
+      }
+    }
+    //built-in command setenv
+    else if (strcmp(cmdArg[0], "setenv") == 0) {
+      if (cmdArg[1] == NULL || cmdArg[2] == NULL) {
+          printf("Usage: setenv variable value\n");
+      } else {
+          char *new_var;
+          int idx = find_env(cmdArg[1]);
+          
+          new_var = malloc(strlen(cmdArg[1]) + strlen(cmdArg[2]) + 2); // +2 for '=' and '\0'
+          if (new_var == NULL) {
+              perror("setenv: malloc failed");
+              continue;
+          }
+          sprintf(new_var, "%s=%s", cmdArg[1], cmdArg[2]);
+          
+          if (idx >= 0) {
+              // replace var
+              free(env_copy[idx]);
+              env_copy[idx] = new_var;
+          } else if (env_count < MAXENV) {
+              // new variable
+              env_copy[env_count++] = new_var;
+          } else {
+              printf("Environment is full, cannot add new variable\n");
+              free(new_var);
+          }
+      }
+    }
+    //built-in command unsetenv
+    else if (strcmp(cmdArg[0], "unsetenv") == 0) {
+      if (cmdArg[1] == NULL) {
+          printf("Usage: unsetenv variable\n");
+      } else {
+          int idx = find_env(cmdArg[1]);
+          if (idx >= 0) {
+              free(env_copy[idx]);
+              // Shift remaining variables down
+              for (int j = idx; j < env_count - 1; j++) {
+                  env_copy[j] = env_copy[j + 1];
+              }
+              env_count--;
+          } else {
+              printf("Variable %s not found\n", cmdArg[1]);
+          }
+      }
+    }
+    //built-in command cd
+    else if (strcmp(cmdArg[0], "cd") == 0) {
+      char cwd[MAXLINE];
+      
+      // Handle empty path or just "cd" - go home
+      if (cmdArg[1] == NULL || strlen(cmdArg[1]) == 0) {
+          // Find HOME in environment variables
+          int idx = find_env("HOME");
+          if (idx >= 0) {
+              char *home = strchr(env_copy[idx], '=') + 1; // Skip "HOME="
+              if (chdir(home) != 0) {
+                  perror("cd");
+              }
+          } else {
+              printf("HOME not set\n");
+          }
+      } else {
+          // Change to specified directory
+          if (chdir(cmdArg[1]) != 0) {
+              perror("cd");
+          }
+      }
+      
+      // Update PWD environment variable
+      if (getcwd(cwd, MAXLINE) != NULL) {
+          int idx = find_env("PWD");
+          char *new_pwd = malloc(strlen("PWD=") + strlen(cwd) + 1);
+          if (new_pwd == NULL) {
+              perror("cd: malloc failed");
+              continue;
+          }
+          sprintf(new_pwd, "PWD=%s", cwd);
+          
+          if (idx >= 0) {
+              free(env_copy[idx]);
+              env_copy[idx] = new_pwd;
+          } else if (env_count < MAXENV) {
+              env_copy[env_count++] = new_pwd;
+          } else {
+              printf("Environment is full, cannot update PWD\n");
+              free(new_pwd);
+          }
+      }
+    }
+
+    //built-in command history
+    else if (strcmp(cmdArg[0], "history") == 0) {
+      int start, entries;
+      
+      // Calculate how many entries to show and the starting point
+      entries = (hist_count < HISTSIZE) ? hist_count : HISTSIZE;
+      start = (hist_count <= HISTSIZE) ? 0 : hist_count - HISTSIZE;
+      
+      for (i = 0; i < entries; i++) {
+          int idx = (start + i) % HISTSIZE;
+          printf("%d: %s\n", start + i + 1, history[idx]);
+      }
+    }
+
+    //implement how to execute Minix commands here
+
+    // Replace the template else block with this:
+    else {
+      // This code runs when the command is not a built-in
+      int found = 0;
+      char full_path[MAXLINE];
+      
+      // Try to find the command in PATH
+      int path_idx = find_env("PATH");
+      if (path_idx >= 0) {
+        char *path_copy = strdup(env_copy[path_idx]);
+        if (path_copy == NULL) {
+          perror("malloc failed for PATH copy");
+          continue;
+        }
+        
+        char *path_var = strchr(path_copy, '=') + 1; // Skip "PATH="
+        char *path_token = strsep(&path_var, ":");
+        
+        while (path_token != NULL && !found) {
+          snprintf(full_path, MAXLINE, "%s/%s", path_token, cmdArg[0]);
+          
+          // Check if the file exists and is executable
+          if (access(full_path, X_OK) == 0) {
+            found = 1;
+            
+            if (debug)
+              printf("Found command at %s\n", full_path);
+            
+            // Now execute the command
+            pid = fork();
+            if (pid == 0) { // child process!
+              process_redirection(cmdArg);
+              execv(full_path, cmdArg);
+              perror("execv failed");
+              exit(1);
+            } else if (pid > 0) { // parent process!
+              if (debug)
+                printf("parent %d waiting for child %d\n", getpid(), pid);
+              waitpid(pid, &status, 0);
+            } else {
+              perror("fork failed");
+            }
+          }
+          path_token = strsep(&path_var, ":");
+        }
+        free(path_copy);
+      }
+      if (!found) {
+        printf("Command not found: %s\n", cmdArg[0]);
+      }
+    }
+
+    //clean up before running the next command
+    i = 0;
+    while (cmdArg[i] != NULL)
+      free( cmdArg[i++] );
+    free(cmdArg);
+  }
+  for (i = 0; i < env_count; i++) {
+    free(env_copy[i]);
+  } 
+  return 0;
+}
+soyr@pe15:~/cs444/proj3$ ./bsgh[K[K[K[K[K[Kmake
+make: Nothing to be done for 'all'.
+soyr@pe15:~/cs444/proj3$ ba[K[K./bash[K[K[Ksh
+bsh> eix  xiot  t
+	0 (exit)
+exiting
+soyr@pe15:~/cs444/proj3$ ./bsh
+bsh> env
+	0 (env)
+SHELL=/bin/bash
+KRB5CCNAME=FILE:/tmp/krb5cc_13946_c2lp7P
+PWD=/home/soyr/cs444/proj3
+LOGNAME=soyr
+XDG_SESSION_TYPE=tty
+MOTD_SHOWN=pam
+HOME=/home/soyr
+LANG=en_US.UTF-8
+SSH_CONNECTION=207.180.155.125 61658 158.121.104.215 22
+XDG_SESSION_CLASS=user
+TERM=xterm
+USER=soyr
+SHLVL=2
+XDG_SESSION_ID=253844
+XDG_RUNTIME_DIR=/run/user/13946
+SSH_CLIENT=207.180.155.125 61658 22
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/local/src/julia-1.8.5/usr/bin
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/13946/bus
+SSH_TTY=/dev/pts/0
+OLDPWD=/home/soyr/cs444
+_=./bsh
+bsh> setenv TEST hello_world!   ! _cs444_bower,an   man
+	0 (setenv)
+	1 (TEST)
+	2 (hello_world_cs444_bowerman)
+bsh> env
+	0 (env)
+SHELL=/bin/bash
+KRB5CCNAME=FILE:/tmp/krb5cc_13946_c2lp7P
+PWD=/home/soyr/cs444/proj3
+LOGNAME=soyr
+XDG_SESSION_TYPE=tty
+MOTD_SHOWN=pam
+HOME=/home/soyr
+LANG=en_US.UTF-8
+SSH_CONNECTION=207.180.155.125 61658 158.121.104.215 22
+XDG_SESSION_CLASS=user
+TERM=xterm
+USER=soyr
+SHLVL=2
+XDG_SESSION_ID=253844
+XDG_RUNTIME_DIR=/run/user/13946
+SSH_CLIENT=207.180.155.125 61658 22
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/local/src/julia-1.8.5/usr/bin
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/13946/bus
+SSH_TTY=/dev/pts/0
+OLDPWD=/home/soyr/cs444
+_=./bsh
+TEST=hello_world_cs444_bowerman
+bsh> unset  env TEs ST
+	0 (unsetenv)
+	1 (TEST)
+bsh> env
+	0 (env)
+SHELL=/bin/bash
+KRB5CCNAME=FILE:/tmp/krb5cc_13946_c2lp7P
+PWD=/home/soyr/cs444/proj3
+LOGNAME=soyr
+XDG_SESSION_TYPE=tty
+MOTD_SHOWN=pam
+HOME=/home/soyr
+LANG=en_US.UTF-8
+SSH_CONNECTION=207.180.155.125 61658 158.121.104.215 22
+XDG_SESSION_CLASS=user
+TERM=xterm
+USER=soyr
+SHLVL=2
+XDG_SESSION_ID=253844
+XDG_RUNTIME_DIR=/run/user/13946
+SSH_CLIENT=207.180.155.125 61658 22
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/local/src/julia-1.8.5/usr/bin
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/13946/bus
+SSH_TTY=/dev/pts/0
+OLDPWD=/home/soyr/cs444
+_=./bsh
+bsh> cd /tmp
+	0 (cd)
+	1 (/tmp)
+bsh> env
+	0 (env)
+SHELL=/bin/bash
+KRB5CCNAME=FILE:/tmp/krb5cc_13946_c2lp7P
+PWD=/tmp
+LOGNAME=soyr
+XDG_SESSION_TYPE=tty
+MOTD_SHOWN=pam
+HOME=/home/soyr
+LANG=en_US.UTF-8
+SSH_CONNECTION=207.180.155.125 61658 158.121.104.215 22
+XDG_SESSION_CLASS=user
+TERM=xterm
+USER=soyr
+SHLVL=2
+XDG_SESSION_ID=253844
+XDG_RUNTIME_DIR=/run/user/13946
+SSH_CLIENT=207.180.155.125 61658 22
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/local/src/julia-1.8.5/usr/bin
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/13946/bus
+SSH_TTY=/dev/pts/0
+OLDPWD=/home/soyr/cs444
+_=./bsh
+bsh> cd 
+	0 (cd)
+bsh> env
+	0 (env)
+SHELL=/bin/bash
+KRB5CCNAME=FILE:/tmp/krb5cc_13946_c2lp7P
+PWD=/home/soyr
+LOGNAME=soyr
+XDG_SESSION_TYPE=tty
+MOTD_SHOWN=pam
+HOME=/home/soyr
+LANG=en_US.UTF-8
+SSH_CONNECTION=207.180.155.125 61658 158.121.104.215 22
+XDG_SESSION_CLASS=user
+TERM=xterm
+USER=soyr
+SHLVL=2
+XDG_SESSION_ID=253844
+XDG_RUNTIME_DIR=/run/user/13946
+SSH_CLIENT=207.180.155.125 61658 22
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/local/src/julia-1.8.5/usr/bin
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/13946/bus
+SSH_TTY=/dev/pts/0
+OLDPWD=/home/soyr/cs444
+_=./bsh
+bsh> ls 
+	0 (ls)
+Found command at /usr/bin/ls
+parent 4166987 waiting for child 4167079
+cs410  cs420  cs444  cs451  cs461  LocalDisk  public_html
+bsh> pws d
+	0 (pwd)
+Found command at /usr/bin/pwd
+parent 4166987 waiting for child 4167080
+/home/soyr
+bsh> cat /etc/passwd
+	0 (cat)
+	1 (/etc/passwd)
+Found command at /usr/bin/cat
+parent 4166987 waiting for child 4167082
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+sys:x:3:3:sys:/dev:/usr/sbin/nologin
+sync:x:4:65534:sync:/bin:/bin/sync
+games:x:5:60:games:/usr/games:/usr/sbin/nologin
+man:x:6:12:man:/var/cache/man:/usr/sbin/nologin
+lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin
+mail:x:8:8:mail:/var/mail:/usr/sbin/nologin
+news:x:9:9:news:/var/spool/news:/usr/sbin/nologin
+uucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin
+proxy:x:13:13:proxy:/bin:/usr/sbin/nologin
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+backup:x:34:34:backup:/etc/amandahome:/usr/sbin/nologin
+list:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin
+irc:x:39:39:ircd:/var/run/ircd:/usr/sbin/nologin
+gnats:x:41:41:Gnats Bug-Reporting System (admin):/var/lib/gnats:/usr/sbin/nologin
+nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+systemd-network:x:100:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin
+systemd-resolve:x:101:103:systemd Resolver,,,:/run/systemd:/usr/sbin/nologin
+systemd-timesync:x:102:104:systemd Time Synchronization,,,:/run/systemd:/usr/sbin/nologin
+messagebus:x:103:106::/nonexistent:/usr/sbin/nologin
+syslog:x:104:110::/home.ORIG/syslog:/usr/sbin/nologin
+_apt:x:105:65534::/nonexistent:/usr/sbin/nologin
+tss:x:106:111:TPM software stack,,,:/var/lib/tpm:/bin/false
+uuidd:x:107:112::/run/uuidd:/usr/sbin/nologin
+tcpdump:x:108:113::/nonexistent:/usr/sbin/nologin
+landscape:x:109:115::/var/lib/landscape:/usr/sbin/nologin
+pollinate:x:110:1::/var/cache/pollinate:/bin/false
+sshd:x:111:65534::/run/sshd:/usr/sbin/nologin
+systemd-coredump:x:999:999:systemd Core Dumper:/:/usr/sbin/nologin
+ubuntu:x:1000:1000:Ubuntu Dummy:/home.ORIG/ubuntu:/bin/bash
+lxd:x:998:100::/var/snap/lxd/common/lxd:/bin/false
+postfix:x:112:119::/var/spool/postfix:/usr/sbin/nologin
+rwhod:x:113:65534::/var/spool/rwho:/usr/sbin/nologin
+_rpc:x:114:65534::/run/rpcbind:/usr/sbin/nologin
+statd:x:115:65534::/var/lib/nfs:/usr/sbin/nologin
+ntp:x:116:123::/nonexistent:/usr/sbin/nologin
+rwhodnfs:x:901:65534:Rwhod NFS Dir Dummy:/var/spool/rwho:/usr/sbin/nologin
+nagios:x:117:124::/var/lib/nagios:/usr/sbin/nologin
+usbmux:x:118:46:usbmux daemon,,,:/var/lib/usbmux:/usr/sbin/nologin
+rtkit:x:119:123:RealtimeKit,,,:/proc:/usr/sbin/nologin
+dnsmasq:x:120:65534:dnsmasq,,,:/var/lib/misc:/usr/sbin/nologin
+cups-pk-helper:x:121:121:user for cups-pk-helper service,,,:/home/cups-pk-helper:/usr/sbin/nologin
+geoclue:x:122:126::/var/lib/geoclue:/usr/sbin/nologin
+pulse:x:123:127:PulseAudio daemon,,,:/var/run/pulse:/usr/sbin/nologin
+avahi:x:124:129:Avahi mDNS daemon,,,:/var/run/avahi-daemon:/usr/sbin/nologin
+saned:x:125:131::/var/lib/saned:/usr/sbin/nologin
+colord:x:126:132:colord colour management daemon,,,:/var/lib/colord:/usr/sbin/nologin
+gdm:x:127:133:Gnome Display Manager:/var/lib/gdm3:/bin/false
+sssd:x:128:123:SSSD system user,,,:/var/lib/sss:/usr/sbin/nologin
+fwupd-refresh:x:129:125:fwupd-refresh user,,,:/run/systemd:/usr/sbin/nologin
+ggtest:x:12345:12345:ggtest,,,:/home/gghinita:/bin/bash
+mysql:x:130:128:MySQL Server,,,:/nonexistent:/bin/false
+lxc-dnsmasq:x:131:130:LXC dnsmasq,,,:/var/lib/lxc:/usr/sbin/nologin
+bsh> history
+	0 (history)
+1: env
+2: setenv TEST hello_world_cs444_bowerman
+3: env
+4: unsetenv TEST
+5: env
+6: cd /tmp
+7: env
+8: cd 
+9: env
+10: ls 
+11: pwd
+12: cat /etc/passwd
+13: history
+bsh> ls
+	0 (ls)
+Found command at /usr/bin/ls
+parent 4166987 waiting for child 4167086
+cs410  cs420  cs444  cs451  cs461  LocalDisk  public_html
+bsh> cat /etc/passwd
+	0 (cat)
+	1 (/etc/passwd)
+Found command at /usr/bin/cat
+parent 4166987 waiting for child 4167107
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+sys:x:3:3:sys:/dev:/usr/sbin/nologin
+sync:x:4:65534:sync:/bin:/bin/sync
+games:x:5:60:games:/usr/games:/usr/sbin/nologin
+man:x:6:12:man:/var/cache/man:/usr/sbin/nologin
+lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin
+mail:x:8:8:mail:/var/mail:/usr/sbin/nologin
+news:x:9:9:news:/var/spool/news:/usr/sbin/nologin
+uucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin
+proxy:x:13:13:proxy:/bin:/usr/sbin/nologin
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+backup:x:34:34:backup:/etc/amandahome:/usr/sbin/nologin
+list:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin
+irc:x:39:39:ircd:/var/run/ircd:/usr/sbin/nologin
+gnats:x:41:41:Gnats Bug-Reporting System (admin):/var/lib/gnats:/usr/sbin/nologin
+nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+systemd-network:x:100:102:systemd Network Management,,,:/run/systemd:/usr/sbin/nologin
+systemd-resolve:x:101:103:systemd Resolver,,,:/run/systemd:/usr/sbin/nologin
+systemd-timesync:x:102:104:systemd Time Synchronization,,,:/run/systemd:/usr/sbin/nologin
+messagebus:x:103:106::/nonexistent:/usr/sbin/nologin
+syslog:x:104:110::/home.ORIG/syslog:/usr/sbin/nologin
+_apt:x:105:65534::/nonexistent:/usr/sbin/nologin
+tss:x:106:111:TPM software stack,,,:/var/lib/tpm:/bin/false
+uuidd:x:107:112::/run/uuidd:/usr/sbin/nologin
+tcpdump:x:108:113::/nonexistent:/usr/sbin/nologin
+landscape:x:109:115::/var/lib/landscape:/usr/sbin/nologin
+pollinate:x:110:1::/var/cache/pollinate:/bin/false
+sshd:x:111:65534::/run/sshd:/usr/sbin/nologin
+systemd-coredump:x:999:999:systemd Core Dumper:/:/usr/sbin/nologin
+ubuntu:x:1000:1000:Ubuntu Dummy:/home.ORIG/ubuntu:/bin/bash
+lxd:x:998:100::/var/snap/lxd/common/lxd:/bin/false
+postfix:x:112:119::/var/spool/postfix:/usr/sbin/nologin
+rwhod:x:113:65534::/var/spool/rwho:/usr/sbin/nologin
+_rpc:x:114:65534::/run/rpcbind:/usr/sbin/nologin
+statd:x:115:65534::/var/lib/nfs:/usr/sbin/nologin
+ntp:x:116:123::/nonexistent:/usr/sbin/nologin
+rwhodnfs:x:901:65534:Rwhod NFS Dir Dummy:/var/spool/rwho:/usr/sbin/nologin
+nagios:x:117:124::/var/lib/nagios:/usr/sbin/nologin
+usbmux:x:118:46:usbmux daemon,,,:/var/lib/usbmux:/usr/sbin/nologin
+rtkit:x:119:123:RealtimeKit,,,:/proc:/usr/sbin/nologin
+dnsmasq:x:120:65534:dnsmasq,,,:/var/lib/misc:/usr/sbin/nologin
+cups-pk-helper:x:121:121:user for cups-pk-helper service,,,:/home/cups-pk-helper:/usr/sbin/nologin
+geoclue:x:122:126::/var/lib/geoclue:/usr/sbin/nologin
+pulse:x:123:127:PulseAudio daemon,,,:/var/run/pulse:/usr/sbin/nologin
+avahi:x:124:129:Avahi mDNS daemon,,,:/var/run/avahi-daemon:/usr/sbin/nologin
+saned:x:125:131::/var/lib/saned:/usr/sbin/nologin
+colord:x:126:132:colord colour management daemon,,,:/var/lib/colord:/usr/sbin/nologin
+gdm:x:127:133:Gnome Display Manager:/var/lib/gdm3:/bin/false
+sssd:x:128:123:SSSD system user,,,:/var/lib/sss:/usr/sbin/nologin
+fwupd-refresh:x:129:125:fwupd-refresh user,,,:/run/systemd:/usr/sbin/nologin
+ggtest:x:12345:12345:ggtest,,,:/home/gghinita:/bin/bash
+mysql:x:130:128:MySQL Server,,,:/nonexistent:/bin/false
+lxc-dnsmasq:x:131:130:LXC dnsmasq,,,:/var/lib/lxc:/usr/sbin/nologin
+bsh> pwd
+	0 (pwd)
+Found command at /usr/bin/pwd
+parent 4166987 waiting for child 4167116
+/home/soyr
+bsh> date
+	0 (date)
+Found command at /usr/bin/date
+parent 4166987 waiting for child 4167146
+Fri 28 Mar 2025 02:51:11 PM EDT
+bsh> ls > fileout.txt
+	0 (ls)
+	1 (>)
+	2 (fileout.txt)
+Found command at /usr/bin/ls
+parent 4166987 waiting for child 4167147
+bsh> cat file	 eout	 t.txt
+	0 (cat)
+	1 (fileout.txt)
+Found command at /usr/bin/cat
+parent 4166987 waiting for child 4167154
+cs410
+cs420
+cs444
+cs451
+cs461
+fileout.txt
+LocalDisk
+public_html
+bsh> cat < fileout.txt
+	0 (cat)
+	1 (<)
+	2 (fileout.txt)
+Found command at /usr/bin/cat
+parent 4166987 waiting for child 4167172
+cs410
+cs420
+cs444
+cs451
+cs461
+fileout.txt
+LocalDisk
+public_html
+bsh> ls -l > listing.txt
+	0 (ls)
+	1 (-l)
+	2 (>)
+	3 (listing.txt)
+Found command at /usr/bin/ls
+parent 4166987 waiting for child 4167204
+bsh> cat < ;oms    listing.txt > copy.txt
+	0 (cat)
+	1 (<)
+	2 (listing.txt)
+	3 (>)
+	4 (copy.txt)
+Found command at /usr/bin/cat
+parent 4166987 waiting for child 4167263
+bsh> cat copy.txt
+	0 (cat)
+	1 (copy.txt)
+Found command at /usr/bin/cat
+parent 4166987 waiting for child 4167266
+total 12
+lrwxrwxrwx 1 root root    32 Jan 28 17:56 cs410 -> /courses/cs410/s25/kkfletch/soyr
+lrwxrwxrwx 1 root root    32 Jan 28 17:56 cs420 -> /courses/cs420/s25/sepahyar/soyr
+lrwxrwxrwx 1 root root    32 Jan 28 17:56 cs444 -> /courses/cs444/s25/hdeblois/soyr
+lrwxrwxrwx 1 root root    29 Jan 28 17:56 cs451 -> /courses/cs451/s25/siyer/soyr
+lrwxrwxrwx 1 root root    30 Jan 28 17:56 cs461 -> /courses/cs461/s25/fundad/soyr
+-rw-r--r-- 1 soyr ugrad   64 Mar 28 14:51 fileout.txt
+-rw-r--r-- 1 soyr ugrad    0 Mar 28 14:52 listing.txt
+drwxr-xr-x 2 soyr ugrad 4096 Feb  5 14:42 LocalDisk
+drwxr-xr-x 5 soyr ugrad 4096 Feb 20 16:29 public_html
+bsh> ls>filertes    test2.txt
+	0 (ls)
+	1 (>)
+	2 (filetest2.txt)
+Found command at /usr/bin/ls
+parent 4166987 waiting for child 4167279
+bsh> cat<filetest2.txt
+	0 (cat)
+	1 (<)
+	2 (filetest2.txt)
+Found command at /usr/bin/cat
+parent 4166987 waiting for child 4167284
+copy.txt
+cs410
+cs420
+cs444
+cs451
+cs461
+fileout.txt
+filetest2.txt
+listing.txt
+LocalDisk
+public_html
+bsh> ls -l details.txt            >t detail      test3.txt
+	0 (ls)
+	1 (-l)
+	2 (>)
+	3 (test3.txt)
+Found command at /usr/bin/ls
+parent 4166987 waiting for child 4167292
+bsh> cat<test3.txt>copy3.t   2.txt
+	0 (cat)
+	1 (<)
+	2 (test3.txt)
+	3 (>)
+	4 (copy2.txt)
+Found command at /usr/bin/cat
+parent 4166987 waiting for child 4167305
+bsh> exit
+	0 (exit)
+exiting
+soyr@pe15:~/cs444/proj3$ exit
+exit
+
+Script done on 2025-03-28 14:53:31-04:00 [COMMAND_EXIT_CODE="0"]

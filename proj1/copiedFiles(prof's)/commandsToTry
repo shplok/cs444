@@ -1,0 +1,11 @@
+cp *.* /home/<csusername>/proj1
+hexdump -C NoDupFreq.txt
+cat NoDupFreq.txt
+cat completeShakespeare.txt
+hexdump -C completeShakespeare.txt
+./huffman
+./huffman -o compressed.txt
+./huffman -i NoDupFreq.txt
+./huffman -i NoDupFreq.txt -o compressedNoDupFreq.txt
+./huffman -d 1 -o huffcodes_cS.txt
+

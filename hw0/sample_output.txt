@@ -1,0 +1,11 @@
+Hello World! 
+Hello again!
+my username is:
+hdeblois
+This is February 2025.
+Location: UMB
+1782803 pts/24   00:00:00 top
+6 16 104
+7 19 113
+8 22 122
+/home/hdeblois/hw0/crude_wc
