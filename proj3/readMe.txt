@@ -31,6 +31,10 @@ for (i = 0; i < env_count; i++) {
 
 - I made a typescript displaying functionality of extra credit problems 1-3
 
+Just to let the reader know, if the date modified times look odd, its because I just added everything to a git repo, you can check for yourself
+
+https://github.com/shplok/cs444
+
 ### Resources
 https://www.geeksforgeeks.org/chdir-in-c-language-with-examples/
 https://www.man7.org/linux/man-pages/man3/getcwd.3.html
